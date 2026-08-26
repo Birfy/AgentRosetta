@@ -1,0 +1,92 @@
+# AgentRosetta sample: a multi-agent literary translation workflow.
+#
+# Five agents and a human editor take a chapter from draft to sign-off. It exercises
+# the content plane (txt blocks, standoff marks, quote anchors, windows), obligation
+# tracking, the session dictionary, and the taste/judgement boundary.
+#
+# All prose here is original. Validate it with:
+#     python3 -c "from agentrosetta import parse,Session; \
+#                 s=Session(); [s.add(m) for m in parse(open('samples/translation-workflow.rose').read())]"
+
+a1.0 def a1>* #sys.hello
+ dialect  = rosetta/2.0
+ profile  = craft/1.0 @sha256:9ab41c
+ caps     = [deref, dict, conf, want, revise, stop, role_routing, content]
+ conform  = R2c
+ fallback = nl
+
+a1.1 def a1>*
+ SRC   = chapter 1 source text, licensed copy, content-addressed @sha256:4f1a7c
+ GLOSS = approved glossary v3 @sha256:c02e19
+ VOICE = target register: literary fiction, close third person, restrained narration
+ TASTE = a choice of taste, not of fact: never carry ~conf; use opt + why + txt
+
+a1.2 do a1>@role:translator #ch1
+ q     produce the first Chinese draft of chapter 1
+ ctx   @D:SRC @D:GLOSS @D:VOICE
+ sub   s1 = paras 1-18   the island and the light   @role:translator
+       s2 = paras 19-52  the keeper's history       @role:translator  on=s1
+       s3 = paras 53-79  the storm                  @role:translator  on=s2
+       s4 = full glossary consistency sweep         @role:termkeeper  on=s3
+       s5 = register and rhythm pass                @role:stylist     on=s4
+ by    3d | 40k_tok
+ want  {draft, n_para, open_terms}
+
+a2.7 take a2>a1 re=a1.2
+
+a2.8 part a2>a1 re=a1.2 #ch1
+ txt tgt @md/zh v=draft3 src=@sha256:71c3d0 win=L1-3
+ | 灯塔看守人坚称，这里从来没发生过任何不寻常的事。
+ |
+ | 而所有人都会告诉你，全岛最不该去问的就是他。
+ a     n_para = 34 of 79 ~hi
+ why   s1 complete, s2 in progress; only the three lines under discussion are
+       inlined, the full draft is at @sha256:71c3d0
+ unk   [whether the pun in para 41 has any workable equivalent]
+ assume reader_register = adult literary, inferred from VOICE, not confirmed ~lo
+
+a3.4 propose a3>a2,@role:editor re=a2.8 #ch1.term
+ q      Chinese name for "Shorewatch"
+ opt    [守岸人, 岸哨, 望海人, transliterate as 肖沃奇]
+ a      rec = 守岸人 ~hi
+ why    already in GLOSS v3, and it matches how the book's other maritime
+        coinages are constructed ~hi
+ mark   @a2.8.tgt#L1|q"灯塔看守人" = must use the GLOSS name here ~hi
+        @a2.8.tgt#L3|q"最不该去问的就是他" > "谁都不会去问他。" ~mid
+ risk   "守岸" carries another sense in some dialects, but the cost of changing
+        it now exceeds the benefit ~mid
+ unk    [whether the publisher requires consistency across volumes]
+ want   accept|reject
+
+editor.1 accept editor>a3 re=a3.4 #ch1.term
+ why    cross-volume consistency outranks a locally better word
+
+a2.11 revise a2>a1 re=a2.8 #ch1
+ txt tgt @md/zh v=draft4 src=@sha256:e77b04 win=L1-3
+ | 守岸人坚称，这里从来没发生过任何不寻常的事。
+ |
+ | 而所有人都会告诉你，谁都不会去问他。
+ why   adopting both proposals in @a3.4; @editor.1 has signed off
+ unk   []
+
+a4.2 propose a4>@role:editor #ch1.voice pri=block
+ q      how to break the long opening sentence
+ opt    [keep the nested clauses, split into short sentences, hybrid: long main clause with the aside set apart]
+ why    all three work; the difference is not correctness, it is whose voice it sounds like
+ txt    "Per the TASTE convention I am not giving a ~conf here. Doing so would
+         dress taste up as judgement. I lean toward the third, but that is a
+         preference, not evidence."
+ unk    [the publisher's tolerance for this narrative register]
+ want   accept|reject
+
+editor.2 accept editor>a4 re=a4.2 #ch1.voice
+ why    take the hybrid; keep one long sentence as the register anchor for the book
+
+a2.20 done a2>a1 re=a1.2 #ch1
+ a      draft      = @sha256:9d40ab ~hi
+        n_para     = 79             ~hi
+        open_terms = []             ~hi
+ why    glossary sweep clean against GLOSS v3; register pass recorded in @editor.2
+ ctx    @D:SRC @D:GLOSS @a4.2 @editor.1 @editor.2
+ unk    [whether the compensation for para 41 actually lands with readers]
+ risk   if the publisher later rejects the compensation, that paragraph is redone ~lo

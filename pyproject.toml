@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentrosetta"
+version = "2.0.0"
+description = "A language for agents to talk to each other: compact on the wire, readable by people, precise about what nobody knows yet."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+keywords = ["agents", "llm", "protocol", "multi-agent", "interoperability", "annotation"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Text Processing :: Markup",
+]
+dependencies = []
+
+[project.optional-dependencies]
+bench = ["tiktoken>=0.5"]
+dev = ["pytest>=7", "tiktoken>=0.5"]
+
+[project.urls]
+Homepage = "https://github.com/Birfy/AgentRosetta"
+Specification = "https://github.com/Birfy/AgentRosetta/blob/main/spec/SPEC.md"
+Issues = "https://github.com/Birfy/AgentRosetta/issues"
+
+[project.scripts]
+agentrosetta = "agentrosetta:_main"
+
+[tool.setuptools]
+py-modules = ["agentrosetta"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
