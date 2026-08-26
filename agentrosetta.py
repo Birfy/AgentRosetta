@@ -91,7 +91,7 @@ LIST_SLOTS = ("unk", "opt")
 SHAPE_SLOTS = ("want",)
 BIND_SLOTS = ("a", "assume", "sub")
 
-CONFIG_KEYS = frozenset({"dialect", "profile", "caps", "conform", "fallback"})
+CONFIG_KEYS = frozenset({"dialect", "profile", "caps", "conform", "fallback", "epoch"})
 RESERVED = frozenset(ACTS) | frozenset(SLOTS) | frozenset(HKEYS)
 SYMBOL_RE = re.compile(r"[A-Z][A-Z0-9_]+$")
 CONF_ORDER = {"lo": 0, "mid": 1, "hi": 2}
@@ -528,6 +528,7 @@ class Message:
     diagnostics: List[Diagnostic] = field(default_factory=list)
     degraded: bool = False  # true when we wrapped raw prose as note + txt
     inherited: List[str] = field(default_factory=list)  # header parts filled from re=
+    epoch: str = ""            # session date, so `at=@t:14:02` can resolve
 
     # -- accessors -------------------------------------------------------
     def slot(self, key: str) -> Optional[Slot]:
@@ -587,7 +588,7 @@ class Message:
 
     @property
     def at(self) -> Optional[datetime]:
-        return parse_time(self.hfields.get("at", ""))
+        return parse_time(self.hfields.get("at", ""), self.epoch)
 
     @property
     def ttl(self) -> Optional[timedelta]:
@@ -629,14 +630,30 @@ def parse_dur(s: str) -> Optional[timedelta]:
     return timedelta(seconds=n * {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[unit])
 
 
-def parse_time(s: str) -> Optional[datetime]:
-    """Accepts `@t:2026-08-26T14:02Z` or a bare ISO-8601 timestamp."""
+TIME_ONLY_RE = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$")
+
+
+def parse_time(s: str, epoch: str = "") -> Optional[datetime]:
+    """Accepts `@t:2026-08-26T14:02Z`, a bare ISO-8601 timestamp, or -- when the
+    session has declared an `epoch` -- a time of day alone: `@t:14:02:20`.
+
+    An ISO-8601 instant costs 16 BPE tokens; a time of day costs 8. In a
+    conversation that stamps every observation that is worth about 3%. Both
+    spellings resolve to the same instant, so the AST does not distinguish them
+    (invariant I-3). Write the date out whenever a session crosses midnight.
+    """
     if not s:
         return None
     raw = s.strip().lstrip("@")
     if raw.startswith("t:"):
         raw = raw[2:]
     raw = raw.split("/")[0]          # interval form: START/END or START/DURATION
+    if TIME_ONLY_RE.match(raw):
+        if not epoch:
+            return None
+        day = epoch.strip().lstrip("@")
+        day = day[2:] if day.startswith("t:") else day
+        raw = f"{day.split('T')[0]}T{raw if raw.count(':') == 2 else raw + ':00'}Z"
     raw = raw.replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(raw)
@@ -1035,7 +1052,15 @@ def validate(msg: Message, session: "Session | None" = None) -> List[Diagnostic]
         d.append(Diagnostic("WARN", "E014",
             f"sens='{sens}' is not a core label; define it in a safety profile"))
     if "at" in msg.hfields and msg.at is None:
-        d.append(Diagnostic("WARN", "W013", f"at='{msg.hfields['at']}' is not a parseable time"))
+        raw = msg.hfields["at"].lstrip("@")
+        if TIME_ONLY_RE.match(raw[2:] if raw.startswith("t:") else raw):
+            d.append(Diagnostic("ERROR", "E024",
+                f"at='{msg.hfields['at']}' is a time of day but no `epoch` was "
+                f"declared; add `epoch = @t:YYYY-MM-DD` to the handshake or write "
+                f"the date out"))
+        else:
+            d.append(Diagnostic("WARN", "W013",
+                f"at='{msg.hfields['at']}' is not a parseable time"))
     if "ttl" in msg.hfields and msg.ttl is None:
         d.append(Diagnostic("WARN", "W013", f"ttl='{msg.hfields['ttl']}' is not a duration"))
     if "ttl" in msg.hfields and "at" not in msg.hfields:
@@ -1200,12 +1225,16 @@ class Session:
     messages: Dict[str, Message] = field(default_factory=dict)
     order: List[str] = field(default_factory=list)
     dictionary: Dict[str, Tuple[str, str]] = field(default_factory=dict)  # SYM -> (val, definer)
+    epoch: str = ""            # declared once at handshake; see parse_time
     profiles: List[str] = field(default_factory=list)
     revised: Dict[str, str] = field(default_factory=dict)  # old id -> revising id
     _sys_seq: int = 0  # id counter for validator repair messages
 
     # -- ingestion -------------------------------------------------------
     def add(self, msg: Message) -> List[Diagnostic]:
+        # The epoch must be attached BEFORE validation, or a relative timestamp
+        # is judged unresolvable while the session already knows how to resolve it.
+        msg.epoch = self.epoch
         d = validate(msg, self)
         parent = self.messages.get(msg.hfields.get("re", ""))
         if parent is not None:
@@ -1234,7 +1263,11 @@ class Session:
                 if not m:
                     continue
                 k, v = m.group("key"), m.group("val").strip()
-                if k == "profile":
+                if k == "epoch":
+                    self.epoch = v
+                    for prior in self.messages.values():
+                        prior.epoch = v
+                elif k == "profile":
                     self.profiles.append(v)
                 elif k.isupper():
                     self.dictionary[k] = (v, msg.sender)
@@ -2248,6 +2281,21 @@ def _selftest() -> None:
        "canonical form keeps them elided rather than re-expanding them")
     ok("a4 → a1" in render(inh, "en") and "#inc.1" in render(inh, "en"),
        "but the human rendering shows them in full")
+
+    print("\n== session-relative time ==")
+    s_e = Session()
+    for m in parse("a1.0 def a1>*\n epoch = @t:2026-08-26\n dialect = rosetta/2.1"):
+        s_e.add(m)
+    rel = parse_one("obs2 part re=a1.0 at=@t:14:02:20\n a x = 1 ~hi\n unk []")
+    abso = parse_one("obs3 part re=a1.0 at=@t:2026-08-26T14:02:20Z\n a x = 1 ~hi\n unk []")
+    s_e.add(rel); s_e.add(abso)
+    ok(rel.at == abso.at and rel.at is not None,
+       "a time of day resolves against the session epoch to the same instant")
+    ok(any(d.code == "E024" for d in Session().add(
+        parse_one("obs9 tell >a1 at=@t:14:02\n a x = 1 ~hi\n unk []"))),
+       "E024: a relative time with no declared epoch is an error, not a guess")
+    ok(parse_time("@t:2026-08-26T14:02Z") is not None,
+       "absolute times still parse with no session at all")
 
     print("\n== revision, idempotency, dictionary ==")
     d_src = ("a1.0 def a1>* #sys.hello\n dialect = rosetta/2.0\n"

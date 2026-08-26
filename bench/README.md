@@ -4,10 +4,13 @@
 pip install tiktoken                    # optional; without it, counts are estimates
 python3 bench/token_compare.py          # compression, short exchanges
 python3 bench/long_cases.py             # compression, long conversations
+python3 bench/mesh_cost.py              # compression, whole mesh   <- the real number
 python3 bench/fidelity.py               # round-trip fidelity, recovery, cost split
+python3 bench/tokenizer_audit.py        # every table in spec/TOKENIZER.md
 ```
 
-Three scripts. **`long_cases.py` is the one that changed our mind.**
+Five scripts. **`mesh_cost.py` is the one that matters**; `long_cases.py` is the one that
+changed our mind about what to claim.
 
 ## What `token_compare.py` measures
 
@@ -153,3 +156,57 @@ claim was wrong and has been removed** from the README and from the specificatio
 The token story, stated the way the data supports it: roughly neutral to modestly positive
 on coordination traffic, clearly positive wherever agents would otherwise re-paste
 artifacts, and negative if you address everything with long URIs out of habit.
+
+
+---
+
+# What `mesh_cost.py` measures
+
+Counting bytes on the wire measures the wrong thing. A multi-agent system pays for the
+**total tokens fed to every model in it**, and the dominant term is not the conversation —
+it is the shared context each freshly spawned agent has to be handed before it can start.
+
+Three reviewers on a 569-token diff:
+
+| | prose mesh | rosetta mesh |
+|---|---|---|
+| the conversation itself | 799 | 788 |
+| artifact handed to each agent | 1707 | — |
+| spans each agent actually reads | — | 395 |
+| **total billed** | **2506** | **1183 (−53%)** |
+
+**On the wire alone that difference is −2%.** Per-message framing hides the entire effect.
+
+## The law
+
+```
+saving = 1 - (W + N·d) / (Wp + N·A)     d = span one agent reads
+                                        A = artifact size
+```
+
+As `N·A` grows, the ratio tends to `d/A` — the fraction of shared context an agent must
+load. **That fraction, not terseness, is the ceiling.**
+
+| shared context | agents | prose mesh | coarse `d ∝ A` | precise `d ≈ const` |
+|---|---|---|---|---|
+| 2,000 | 4 | 8,799 | 70% | **85%** |
+| 5,000 | 4 | 20,799 | 73% | **93%** |
+| 100,000 | 8 | 800,799 | 76% | **99%** |
+| 1,000,000 | 20 | 20,000,799 | 76% | **99%** |
+
+Coarse addressing plateaus in the seventies however large the corpus gets — reading a
+fixed fraction of something huge is still huge. Precise addressing does not plateau,
+because the span an agent needs does not grow with the corpus it sits in.
+
+**90% arrives at roughly 5,000 tokens of shared context across four agents.** One source
+file and four reviewers.
+
+## What this justifies
+
+Every addressing feature in the specification is a lever on `d`: span addresses, `win=`
+windows, quote anchors, `sub` assignment, `want` contracts. They exist so a worker spawned
+against a million-token corpus reads six hundred tokens of it.
+
+And the converse is the honest warning: **a mesh whose agents each load the whole
+repository gets the coarse column, and no amount of terseness in the message format will
+move it.**

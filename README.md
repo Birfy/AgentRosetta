@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-135%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-138%20passing-brightgreen">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.9%2B-blue">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-lightgrey">
@@ -254,7 +254,8 @@ something"* are `do` and `ask`, so permission can be enforced at the **protocol 
 | **[spec/PROMPT.md](spec/PROMPT.md)** | System prompt cards. Card R is ~1500 tokens and teaches the whole language |
 | **[spec/EXAMPLES.md](spec/EXAMPLES.md)** | Eleven worked domains — incident response, literature review, legal diligence, clinical triage, supply planning, financial diligence, data QA, creative work, adversarial review, translation — plus an anti-pattern table |
 | **[agentrosetta.py](agentrosetta.py)** | Reference implementation: parser, validator, bilingual renderer, 119 assertions, five demos. Zero dependencies, one file |
-| **[bench/](bench/)** | Reproducible token comparison against equal-information baselines |
+| **[spec/TOKENIZER.md](spec/TOKENIZER.md)** | What we measured against three BPE tokenizers, what we changed, and what we tried and rejected — including why non-ASCII markers lose |
+| **[bench/](bench/)** | Four reproducible harnesses: per-message compression, long-conversation compression, **mesh cost**, and round-trip fidelity |
 | **[samples/](samples/)** | Runnable conversation transcripts |
 
 ### The core vocabulary
@@ -301,47 +302,43 @@ are not all measured, and this README will not pretend otherwise.**
 
 **Measured.** Three harnesses, all reproducible, all in CI.
 
-*Compression, short exchanges* (`bench/token_compare.py`). Against **equal-information**
-prose baselines — baselines that spell out the same per-claim confidence, the same
-unknowns and the same references — the wire form is about **21% smaller** across four
-one- and two-message pairs.
+*Compression, per message* (`bench/token_compare.py`, `bench/long_cases.py`). Against
+equal-information prose: **~21% on short exchanges, ~14% on a 24-message conversation.**
+Real, but modest — and the first long-case run was actually *negative*, which is what
+produced 2.1 (see [spec/TOKENIZER.md](spec/TOKENIZER.md)).
 
-*Compression, long conversations* (`bench/long_cases.py`). **The first run was a negative
-result, and it is the reason 2.1 exists.** On a 24-message incident investigation, the
-format as originally written came out **6% larger** than prose from a disciplined agent.
-Reading the decomposition turned up three redundancies. Removing them:
+*Compression, per mesh* (`bench/mesh_cost.py`). **This is the number that matters, and
+counting wire bytes hides it completely.** What a multi-agent system pays for is the total
+tokens fed to every model in it, and the dominant term is the shared context each freshly
+spawned agent must be handed before it can start.
 
-| step | tokens | vs prose |
+Three reviewers on a 569-token diff:
+
+| | prose mesh | rosetta mesh |
 |---|---|---|
-| 2.0 as first written, full headers | 1782 | +6% |
-| **A** elide derivable header parts | 1615 | −4% |
-| **B** bind repeated URIs with `def` | 1595 | −5% |
-| **C** letters-only agents, compact msg-ids | **1501** | **−11%** |
-| *prose, disciplined agent* | *1669* | |
-| *prose, re-pasting agent* | *1829* | *−18%* |
+| the conversation itself | 799 | 788 |
+| artifact handed to each agent | 1707 | — |
+| spans each agent actually reads | — | 395 |
+| **total tokens billed** | **2506** | **1183 (−53%)** |
 
-**15% smaller than where it started, and the sign flips.** Nothing was removed but
-duplication — the AST, the round trip and the human rendering are identical at every step,
-which `bench/fidelity.py` verifies.
+On the wire alone that difference is **−2%**. The saving is not in the notation.
 
-What each lever turned out to be:
+It scales with how narrowly an agent can be addressed:
 
-- **A is pure duplication.** The sender is already the msg-id prefix; a reply's recipient
-  and topic are already its parent's. Writing them again cost 9% of the conversation.
-  `rel3 done a4>cmd re=cmd2 #inc.4471` and `rel3 done re=cmd2` parse to the same AST.
-- **B is the dictionary doing its job.** The original transcript never bound its repeated
-  URIs with `def`. An authoring failure, not a language one.
-- **C is a tokeniser fact.** Every separator forces a BPE split, so `a1.7` costs four
-  tokens and `obs7` costs two — and message ids are ~14% of a long conversation. Name
-  agents with letters (`obs`, `dba`, `release`), which is cheaper *and* more readable than
-  `a1`, `a2`.
+| shared context | agents | prose mesh | coarse addressing | precise addressing |
+|---|---|---|---|---|
+| 2,000 | 4 | 8,799 | 2,636 (70%) | 1,312 (**85%**) |
+| 5,000 | 4 | 20,799 | 5,416 (73%) | 1,312 (**93%**) |
+| 100,000 | 8 | 800,799 | 185,908 (76%) | 1,836 (**99%**) |
+| 1,000,000 | 20 | 20,000,799 | 4,628,788 (76%) | 3,408 (**99%**) |
 
-Two things the exercise did **not** change. A machine-readable address still costs more
-than the phrase it replaces, so **reference-over-copy is a correctness feature, not a
-compression one** — it pays when it saves you from carrying the artifact. And omitting a
-confidence marker was made **more** expensive on purpose: it used to default to `~hi`,
-which is 2.6% cheaper and wrong, since an agent that never writes `~` would then silently
-assert full confidence in everything. Omission now means *unstated*.
+**90% arrives at about 5,000 tokens of shared context across four agents** — one source
+file and four reviewers. Coarse addressing plateaus in the seventies no matter how large
+the corpus gets, because reading a fixed fraction of something huge is still huge.
+
+What buys it is that an address can name a *span* — `@D:DIFF#L18|q"for attempt in range"` —
+that `sub` can hand one agent one span, and that `want` says what to bring back. A worker
+can then be spawned against a million-token corpus and read six hundred tokens of it.
 
 *Fidelity* (`bench/fidelity.py`). Thirteen deliberately hostile content lines — code fences,
 a line shaped exactly like a Rosetta header, RTL script, a decomposed grapheme, trailing
@@ -372,11 +369,12 @@ evaluation in full. Until it runs, these are hypotheses:
 - the content plane beats re-pasting on collaborative tasks
 - the off-distribution penalty is near zero
 
-**The efficiency case, stated as the data supports it:** about 21% on short coordination
-messages, about 11% on long conversations once the redundancy is gone, better still
-wherever agents would otherwise re-paste artifacts — and **negative if you ignore the two
-conventions in [§5.3 and §6.2.1](spec/SPEC.md)**, which is how the first measurement came
-out.
+**The efficiency case, stated as the data supports it.** Per message it is modest — about
+21% short, 14% long, and *negative* if you ignore the conventions in
+[§5.3 and §6.2.1](spec/SPEC.md), which is how the first measurement came out. Per mesh it
+is large — **90%+ once shared context outweighs the conversation** — and that saving comes
+from addressing precision, not from terseness. A mesh whose agents each load the whole
+repository gets none of it.
 
 **The integrity case is the larger one — and it is still awaiting evidence.** What the cost
 decomposition does establish is that the integrity machinery is not what you are paying

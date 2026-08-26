@@ -1,0 +1,65 @@
+cmd0 def >* #sys.hello
+ dialect = rosetta/2.1
+ epoch   = @t:2026-08-26
+ conform = R2c
+
+cmd1 def >*
+ PR   = @pr:812 payment client retry + timeout change
+ DIFF = @file:pr/812.diff the reviewed diff, 62 lines
+ GATE = must pass before merge: correctness, config safety, test coverage
+
+cmd2 do >@role:reviewer #pr.812
+ q     review PR for GATE
+ ctx   @D:DIFF
+ sub   s1 = correctness of the retry loop   @role:backend
+       s2 = config and rollout safety       @role:sre
+       s3 = test coverage                   @role:qa
+ by    2h
+ want  {verdict: one_of[block|comment|approve], findings: list}
+
+be1 take re=cmd2
+
+be2 done re=cmd2 #pr.812
+ a     verdict  = block ~hi
+       findings = [retry-on-5xx is not idempotent, PaymentError arity changed] ~hi
+ mark  @D:DIFF#L18|q"for attempt in range(self.retries + 1)" =
+       retries a POST that already carries idem_key, but the upstream is only
+       idempotent within its own window; a 500 after commit will double-charge ~hi
+       @D:DIFF#L30|q"raise PaymentError(resp.status, order_id)" =
+       arity changed; every caller constructing PaymentError breaks ~hi
+ why   the idem_key is threaded into payload but never sent upstream
+ unk   [whether the payment provider dedupes on idem_key server-side]
+ risk  double-charge on retry is a money bug, not a latency bug ~hi
+
+sre1 take re=cmd2
+
+sre2 done re=cmd2 #pr.812
+ a     verdict  = block ~hi
+       findings = [timeout 30s>3s with retries=2 raises worst-case latency] ~mid
+ mark  @D:DIFF#L4|q"cfg.get('http.timeout', 3)" =
+       3s is below the observed upstream p99 of 4.1s @dash:grafana/pay-p99 ~hi
+       @D:DIFF#L47|q"timeout: 3" =
+       prod.yaml and the code default must not drift; pin one ~mid
+ why   3s x 3 attempts is 9s worst case against a 5s gateway budget
+ unk   [current gateway budget, whether retries are counted per-request]
+ risk  the retry loop converts a timeout into a gateway 504 ~mid
+
+qa1 take re=cmd2
+
+qa2 done re=cmd2 #pr.812
+ a     verdict  = comment ~hi
+       findings = [no test for the 409 refund path] ~hi
+ mark  @D:DIFF#L38|q"return {'status': 'already_refunded'}" =
+       new branch, no test covers it ~hi
+       @D:DIFF#L57|q"assert len(calls) == 2" =
+       asserts the count but not that the second call carried the same idem_key ~mid
+ why   coverage report @ext:ci:cov-8831 shows the 409 branch unhit
+ unk   []
+
+cmd3 tell >@role:human #pr.812
+ a     verdict = block ~hi
+       blocking = [@be2.a.findings, @sre2.a.findings] ~hi
+ why   two independent blocks; @qa2 is non-blocking
+ ctx   @be2 @sre2 @qa2
+ unk   [whether the provider dedupes on idem_key, which decides @be2]
+ risk  merging on the qa verdict alone would ship a double-charge path ~hi

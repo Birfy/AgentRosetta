@@ -1347,8 +1347,48 @@ coordination messages, about 10% on long conversations once the redundancy is go
 clearly better wherever agents would otherwise re-paste artifacts, and negative if you
 ignore §5.3 and §6.2.1.
 
-What the cost decomposition does establish is that **the integrity machinery is not what
-you pay for**: confidence, unknowns and assumptions come to 2% of the wire form.
+### 25.2 Mesh cost, which is the unit that bills
+
+Counting wire bytes measures the wrong thing. A multi-agent system pays for the total
+tokens fed to every model in it, and the dominant term is the shared context each freshly
+spawned agent must be handed.
+
+```
+saving = 1 - (W + N·d) / (Wp + N·A)      W   wire conversation
+                                         Wp  prose conversation
+                                         N   agents given the context
+                                         d   span one agent reads
+                                         A   artifact size
+```
+
+As `N·A` grows the conversation stops mattering and the ratio tends to `d/A` — **the
+fraction of shared context an agent must load.** That fraction, not terseness, is the
+ceiling.
+
+Measured on three reviewers and a 569-token diff (`bench/mesh_cost.py`): **2506 → 1183
+tokens, −53%, where the wire-level difference is −2%.** Extended:
+
+| shared context | agents | prose mesh | coarse `d ∝ A` | precise `d ≈ const` |
+|---|---|---|---|---|
+| 2,000 | 4 | 8,799 | 70% | **85%** |
+| 5,000 | 4 | 20,799 | 73% | **93%** |
+| 100,000 | 8 | 800,799 | 76% | **99%** |
+
+**Coarse addressing plateaus in the seventies** however large the corpus: reading a fixed
+fraction of something huge is still huge. **Precise addressing does not plateau**, because
+the span an agent needs does not grow with the corpus it sits in.
+
+This is the design justification for §11 in its entirety. Span addresses, `win=`, quote
+anchors, `sub` assignment and `want` contracts exist so that a worker spawned against a
+million-token corpus reads six hundred tokens of it. Every one of them is a lever on `d`.
+
+**90% is reached at roughly 5,000 tokens of shared context across four agents.** Below
+that the format is worth single digits and this specification says so.
+
+### 25.3 What the cost decomposition establishes
+
+**The integrity machinery is not what you pay for**: confidence, unknowns and assumptions
+come to 2% of the wire form.
 
 ## 26. Risks and open problems
 

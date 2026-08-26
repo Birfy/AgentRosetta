@@ -88,6 +88,25 @@ def test_long_cases_run_and_stay_valid():
     assert "incident-24" in proc.stdout
 
 
+def test_mesh_and_tokenizer_harnesses_run():
+    """The mesh-cost and tokenizer harnesses must run, and review.rose stay clean."""
+    from agentrosetta import Session, parse
+
+    with open(os.path.join(ROOT, "bench", "cases", "review.rose"), encoding="utf-8") as fh:
+        messages = parse(fh.read())
+    session = Session()
+    errors = [f"{m.id}: {d}" for m in messages
+              for d in session.add(m) if d.level == "ERROR"]
+    assert not errors, errors
+
+    for script in ("mesh_cost.py", "tokenizer_audit.py"):
+        proc = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "bench", script)],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, f"{script}: {proc.stderr}"
+
+
 def test_fidelity_checks_pass():
     """Round-trip fidelity and information recovery must be perfect."""
     proc = subprocess.run(

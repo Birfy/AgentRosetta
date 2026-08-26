@@ -49,6 +49,36 @@ a two-message exchange.
 
 ### Measured
 
+- **Mesh cost is the unit that bills, and it changes the whole picture.**
+  `bench/mesh_cost.py` counts total tokens fed to every model in a system rather than
+  bytes on the wire. Three reviewers on a 569-token diff: 2506 → 1183, **−53%**, where the
+  wire-level difference is **−2%**. The saving is the shared context each freshly spawned
+  agent does *not* have to be handed.
+- **90% is reached at ~5,000 tokens of shared context across four agents**, and 99% at
+  realistic corpus sizes — but only with precise addressing. Coarse addressing (an agent
+  must load a whole file) plateaus in the seventies however large the corpus gets.
+- `spec/TOKENIZER.md` and `bench/tokenizer_audit.py`: what three BPE tokenizers say about
+  the format. Non-ASCII markers were measured and **rejected** — ASCII punctuation is the
+  only symbol class every tokenizer agrees costs one token; CJK is 1 token in `o200k` and
+  2–3 elsewhere. All 14 acts and all 14 slots were already single tokens.
+- The syntax floor is **17%**: a syntax that cost nothing at all would shrink a
+  conversation by that much. Naming is 24%, payload 58%.
+
+### Added
+
+- **Session-relative timestamps.** Declare `epoch = @t:2026-08-26` once and write
+  `at=@t:14:02:20`. An ISO-8601 instant costs 16 tokens; a time of day costs 8. Worth ~3%.
+  `E024` when a relative time is used with no epoch declared.
+- `bench/mesh_cost.py`, `bench/tokenizer_audit.py`, `bench/cases/review.rose` and its
+  prose baseline.
+
+### Fixed
+
+- The session epoch was attached to a message *after* validation, so a relative timestamp
+  was judged unresolvable while the session already knew how to resolve it.
+
+### Measured
+
 - **The compression saving does not scale with conversation length.** `bench/long_cases.py`
   runs a 24-message incident investigation against two equal-information prose baselines.
   Against a disciplined agent the wire form is **5% larger**; against a re-pasting agent it

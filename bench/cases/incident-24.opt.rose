@@ -7,7 +7,8 @@
 # Diff the two files to see exactly what changed.
 
 cmd0 def >* #sys.hello
- dialect = rosetta/2.0
+ dialect = rosetta/2.1
+ epoch   = @t:2026-08-26
  conform = R2c
 
 cmd1 def >*
@@ -29,20 +30,20 @@ cmd2 do >@role:sre #inc.4471 pri=high
 
 obs1 take re=cmd2
 
-obs2 part re=cmd2 at=@t:2026-08-26T14:11Z
+obs2 part re=cmd2 at=@t:14:11
  a     error_class = upstream timeout, not 500 from CKO itself ~hi
-       onset       = @t:2026-08-26T14:02:20Z ~hi
+       onset       = @t:14:02:20 ~hi
  why   @file:log/2f9c#L440-512 every failure is a 504 from the payment upstream
- ctx   GCKO#from=14:00&to=14:15
+ ctx   GCKO#14:00-14:15
  unk   [whether the upstream itself degraded, blast radius beyond CKO]
 
 dba1 take re=cmd2
 
-dba2 part re=cmd2 at=@t:2026-08-26T14:14Z ttl=10m
+dba2 part re=cmd2 at=@t:14:14 ttl=10m
  a     db_health  = normal ~hi
        slow_query = none above the 200ms threshold ~hi
        conn_pool  = 34% utilised ~hi
- why   GDB#from=13:30&to=14:15
+ why   GDB#13:30-14:15
  unk   []
 
 rel1 part re=cmd2
@@ -93,25 +94,25 @@ cmd5 do >rel re=sre1 pri=high
 
 rel5 take re=cmd5
 
-rel6 part re=cmd5 at=@t:2026-08-26T14:31Z
+rel6 part re=cmd5 at=@t:14:31
  a     stage = build green, canary at 5% ~hi
  unk   [whether 5% is enough signal to judge]
 
-rel7 done re=cmd5 at=@t:2026-08-26T14:39Z
+rel7 done re=cmd5 at=@t:14:39
  a     reverted = BAD ~hi
        deployed = @commit:aa71 ~hi
  why   @ext:ci:pipeline-8823
  unk   [error rate after full rollout, still rolling]
 
-obs3 part re=cmd2 at=@t:2026-08-26T14:47Z
+obs3 part re=cmd2 at=@t:14:47
  a     error_rate = 0.4% and falling ~hi
- why   GCKO#from=14:35&to=14:47
+ why   GCKO#14:35-14:47
  unk   [whether it settles below the SPIKE threshold]
 
-obs4 part re=cmd2 at=@t:2026-08-26T15:02Z
+obs4 part re=cmd2 at=@t:15:02
  a     error_rate = 0.08% ~hi
        recovered  = yes ~hi
- why   GCKO#from=14:47&to=15:02 fifteen minutes below SLO baseline
+ why   GCKO#14:47-15:02 fifteen minutes below SLO baseline
  unk   []
 
 cmd6 revise >* re=cmd4
@@ -141,7 +142,7 @@ com2 accept re=cmd7
 cmd8 note >@role:sre #inc.4471
  a     cause     = BAD ~hi
        fix       = @commit:aa71 ~hi
-       recovered = @t:2026-08-26T14:47Z ~hi
+       recovered = @t:14:47 ~hi
        duration  = 45m ~hi
  why   full chain in @#inc.4471
  ctx   @rel3 @rel7 @obs4

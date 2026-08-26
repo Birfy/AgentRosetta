@@ -41,3 +41,9 @@ jobs:
 
       - name: Token comparison, long conversations (informational)
         run: python bench/long_cases.py
+
+      - name: Mesh cost (informational)
+        run: python bench/mesh_cost.py
+
+      - name: Tokenizer audit (informational)
+        run: python bench/tokenizer_audit.py

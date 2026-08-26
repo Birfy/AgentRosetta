@@ -1,0 +1,62 @@
+--- a/services/checkout/payment.py
++++ b/services/checkout/payment.py
+@@ -14,9 +14,11 @@ class PaymentClient:
+     def __init__(self, session, cfg):
+         self.session = session
+-        self.timeout = cfg.get('http.timeout', 30)
++        self.timeout = cfg.get('http.timeout', 3)
++        self.retries = cfg.get('http.retries', 0)
+         self.base = cfg['payment.base_url']
+
+@@ -41,14 +43,22 @@ class PaymentClient:
+     async def charge(self, order_id, amount_cents, idem_key):
+-        resp = await self.session.post(
+-            f'{self.base}/charge',
+-            json={'order': order_id, 'amount': amount_cents},
+-            timeout=self.timeout,
+-        )
++        payload = {'order': order_id, 'amount': amount_cents}
++        for attempt in range(self.retries + 1):
++            resp = await self.session.post(
++                f'{self.base}/charge',
++                json=payload,
++                timeout=self.timeout,
++            )
++            if resp.status < 500:
++                break
+         if resp.status >= 400:
+-            raise PaymentError(resp.status)
++            raise PaymentError(resp.status, order_id)
+         return await resp.json()
+
+@@ -78,6 +88,13 @@ class PaymentClient:
+     async def refund(self, charge_id, amount_cents):
+         resp = await self.session.post(
+             f'{self.base}/refund',
+             json={'charge': charge_id, 'amount': amount_cents},
+         )
++        if resp.status == 409:
++            return {'status': 'already_refunded'}
+         return await resp.json()
+
+--- a/services/checkout/config/prod.yaml
++++ b/services/checkout/config/prod.yaml
+@@ -7,3 +7,5 @@ http:
+   pool_size: 64
+-  timeout: 30
++  timeout: 3
++  retries: 2
+
+--- a/tests/test_payment.py
++++ b/tests/test_payment.py
+@@ -22,6 +22,18 @@ async def test_charge_ok():
+     assert result['status'] == 'ok'
++
++async def test_charge_retries_on_5xx(monkeypatch):
++    calls = []
++    async def fake_post(url, **kw):
++        calls.append(url)
++        return FakeResp(500 if len(calls) < 2 else 200)
++    monkeypatch.setattr(session, 'post', fake_post)
++    result = await client.charge('o1', 100, 'k1')
++    assert len(calls) == 2
