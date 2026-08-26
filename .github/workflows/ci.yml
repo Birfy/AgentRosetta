@@ -36,5 +36,8 @@ jobs:
       - name: Fidelity - round trip, recovery, cost split
         run: python bench/fidelity.py
 
-      - name: Token comparison (informational)
+      - name: Token comparison, short exchanges (informational)
         run: python bench/token_compare.py
+
+      - name: Token comparison, long conversations (informational)
+        run: python bench/long_cases.py

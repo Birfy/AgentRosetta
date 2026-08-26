@@ -65,6 +65,29 @@ def test_bench_is_runnable():
     assert "rosetta" in proc.stdout
 
 
+def test_long_cases_run_and_stay_valid():
+    """The long scenario must parse clean, and the harness must run."""
+    from agentrosetta import Session, parse
+
+    path = os.path.join(ROOT, "bench", "cases", "incident-24.rose")
+    with open(path, encoding="utf-8") as fh:
+        messages = parse(fh.read())
+    assert len(messages) == 24
+    session = Session()
+    errors = [f"{m.id}: {d}" for m in messages
+              for d in session.add(m) if d.level == "ERROR"]
+    assert not errors, errors
+    open_obligations = [k for k, v in session.obligations().items() if v is None]
+    assert not open_obligations, f"unclosed: {open_obligations}"
+
+    proc = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "bench", "long_cases.py")],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "incident-24" in proc.stdout
+
+
 def test_fidelity_checks_pass():
     """Round-trip fidelity and information recovery must be perfect."""
     proc = subprocess.run(

@@ -5,6 +5,32 @@ This project follows the versioning rules in [spec/SPEC.md §22](spec/SPEC.md):
 MINOR releases are additive only, and anything new must be safely ignorable by an older
 parser as a continuation line.
 
+## [Unreleased]
+
+### Measured
+
+- **The compression saving does not scale with conversation length.** `bench/long_cases.py`
+  runs a 24-message incident investigation against two equal-information prose baselines.
+  Against a disciplined agent the wire form is **5% larger**; against a re-pasting agent it
+  is 4% smaller. The decomposition: message headers 29%, references 25%, epistemics 2%.
+  A machine-readable address costs more than the English phrase it replaces, so
+  reference-over-copy is **not** a token optimisation — it pays only when it saves you from
+  carrying the artifact.
+- The README and specification previously implied that longer conversations would compress
+  *better*, since they exercise reference discipline more. That claim was wrong and has
+  been removed. §11.6 and §25.1 now state the measured position.
+
+### Fixed
+
+- **`want done|fail` rejected `take` and `part`.** An act contract constrains the answer,
+  and claiming work or reporting progress does not purport to be one. They are now exempt,
+  matching the exemption the key contract already made.
+- **`revise` was checked as if its `re=` named a message being replied to.** It names the
+  message being *corrected*. Checking it as a reply turned every retraction into a contract
+  violation. New `E023` enforces the real rule instead: you may only revise your own message.
+
+Both were found by writing a long scenario. Neither is reachable from a two-message exchange.
+
 ## [2.0.0] — 2026-08-26
 
 The content plane. Version 1.1 had an axiom — *coordination, not cargo* — that pushed all

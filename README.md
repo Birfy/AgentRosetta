@@ -196,6 +196,11 @@ all content into blobs. It was wrong, and expensively so:
 The rule now is a test, and it is machine-checkable: *will any agent speak about one of its
 lines?* If yes, inline it as a `txt` block so it has addresses. If no, ship a hash.
 
+One correction the benchmarks forced: **referencing is not a token optimisation.** A
+machine-readable address costs more than the phrase it replaces. It pays when it saves you
+from carrying the artifact, and not otherwise. Reference-over-copy earns its place by
+keeping content addressable and attention undiluted — not by being shorter.
+
 And because carriage is orthogonal to addressing — `win=L38-46` inlines nine lines of a
 seventy-nine-line chapter with **absolute** numbering — **getting that call wrong is not a
 disaster.** The next hop changes how the content travels; every address already written
@@ -292,11 +297,43 @@ still find:
 The specification and the reference implementation are complete and tested. **The claims
 are not all measured, and this README will not pretend otherwise.**
 
-**Measured.** Two harnesses, both reproducible, both in CI.
+**Measured.** Three harnesses, all reproducible, all in CI.
 
-*Compression* (`bench/token_compare.py`). Against **equal-information** prose baselines —
-baselines that spell out the same per-claim confidence, the same unknowns and the same
-references — the wire form is about **21% smaller** across four pairs.
+*Compression, short exchanges* (`bench/token_compare.py`). Against **equal-information**
+prose baselines — baselines that spell out the same per-claim confidence, the same
+unknowns and the same references — the wire form is about **21% smaller** across four
+one- and two-message pairs.
+
+*Compression, long conversations* (`bench/long_cases.py`). **It does not scale, and this
+is a negative result we ran into rather than around.** On a 24-message incident
+investigation, against prose written by a disciplined agent, the wire form comes out
+**5% larger**:
+
+| variant | tokens |
+|---|---|
+| rosetta wire | 1767 |
+| prose, disciplined agent | 1669 |
+| prose, re-pasting agent | 1829 |
+
+The decomposition says why. Two costs grow linearly with message count:
+
+| | tokens | share |
+|---|---|---|
+| message headers | 519 | 29% |
+| `@references` | 455 | 25% |
+| slot keys | 110 | 6% |
+| `~confidence` | **52** | **2%** |
+| payload | 631 | 35% |
+
+A header costs ~22 tokens where prose addresses the same thing in ~8, and **a
+machine-readable address costs more than the English phrase it replaces**. Pointing only
+pays when the alternative is *carrying the thing pointed at* — the crossover sits around
+a few hundred tokens of shared artifact content, past which addressing wins by a widening
+margin. That is the regime a mesh spawning fresh workers actually lives in, but it is a
+condition, not a property of the format.
+
+Note the row that is nearly free: **the epistemic markers cost 2%.** The part of this
+design that changes downstream behaviour is not what you pay for. The addressing is.
 
 *Fidelity* (`bench/fidelity.py`). Thirteen deliberately hostile content lines — code fences,
 a line shaped exactly like a Rosetta header, RTL script, a decomposed grapheme, trailing
@@ -326,9 +363,15 @@ evaluation in full. Until it runs, these are hypotheses:
 - the content plane beats re-pasting on collaborative tasks
 - the off-distribution penalty is near zero
 
-**The efficiency case is real but modest. The integrity case is the larger one — and it is
-also the one still awaiting evidence.** If the epistemic fields do not earn their tokens
-when measured, they should be cut. They are the most expensive part of the format.
+**The efficiency case is narrower than this project first claimed.** It is real on short
+coordination messages and on any exchange where agents would otherwise re-paste artifacts.
+It is roughly neutral on long disciplined conversations, and it can go negative if you
+address everything with long URIs out of habit.
+
+**The integrity case is the larger one — and it is still awaiting evidence.** What the cost
+decomposition does establish is that the integrity machinery is not what you are paying
+for: confidence, unknowns and assumptions come to 2% of the wire form. Whether they earn
+even that has to come from the task-level evaluation, not from a token count.
 
 **Open problems**, stated plainly in [§26](spec/SPEC.md):
 
@@ -337,6 +380,10 @@ when measured, they should be cut. They are the most expensive part of the forma
 - There is no hard ceiling on channel size. That belongs to the host at the transport layer.
 - Profile ecosystem fragmentation is the largest long-term risk, and content addressing only
   partly mitigates it.
+- **The envelope is 29% of a long conversation and has not been optimised.** A repeated
+  `#topic` that `re=` already implies, and verbose URI-shaped references, are the obvious
+  targets. Nothing has been done about either, because doing it before the task-level
+  evaluation would be optimising the wrong number.
 
 ---
 

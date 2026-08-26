@@ -1103,7 +1103,10 @@ def check_reply(ask: Message, reply: Message) -> List[Diagnostic]:
         return d
     sh = want.shape
     if sh.acts:
-        if reply.act not in sh.acts and reply.act != "part":
+        # `take` and `part` are intermediate: claiming work and reporting progress
+        # do not purport to be the answer, so an act contract cannot bind them.
+        # This mirrors the exemption the key contract already makes below.
+        if reply.act not in sh.acts and reply.act not in ("take", "part"):
             d.append(Diagnostic("ERROR", "E009a",
                 f"reply act `{reply.act}` not in required {'|'.join(sh.acts)}"))
         return d
@@ -1175,6 +1178,14 @@ class Session:
         if re_id and re_id not in self.messages:
             d.append(Diagnostic("WARN", "E008",
                 f"re={re_id} refers to an unknown message (deref it before handling)"))
+        elif re_id and msg.act == "revise":
+            # A `revise` carries the id of the message it CORRECTS, not one it
+            # answers. Checking it as a reply mistakes a retraction for one.
+            parent = self.messages[re_id]
+            if parent.sender != msg.sender:
+                d.append(Diagnostic("ERROR", "E023",
+                    f"`revise` may only correct your own message; {re_id} is "
+                    f"{parent.sender}'s. Use `propose` with a `mark`, or `reject`"))
         elif re_id:
             parent = self.messages[re_id]
             legal = REPLIES.get(parent.act)
@@ -2060,6 +2071,22 @@ def _selftest() -> None:
     ok(any(d.code == "E009c" for d in check_reply(slotty, parse_one(
         "a1.51 tell a1>a3 re=a3.50\n a cause = X ~hi\n unk []"))),
        "E009c: a missing required SLOT is caught, not just a missing key")
+
+    s_iv = Session()
+    s_iv.add(parse_one("a1.5 do a1>a4 #x\n a step = !revert @commit:9f2a\n want done|fail"))
+    ok(not any(d.code == "E009a" for d in s_iv.add(parse_one("a4.4 take a4>a1 re=a1.5"))),
+       "`take` does not violate a `want done|fail` contract - it is not an answer")
+    ok(not any(d.code == "E009a" for d in s_iv.add(parse_one(
+        "a4.5 part a4>a1 re=a1.5\n a stage = canary ~hi\n unk []"))),
+       "nor does `part`")
+    s_rv = Session()
+    s_rv.add(parse_one("a1.4 propose a1>a3 #x\n a rec = revert ~hi\n want accept|reject"))
+    ok(not any(d.code.startswith("E009") for d in s_rv.add(parse_one(
+        "a1.6 revise a1>* re=a1.4\n a rec != revert-only ~hi\n unk []"))),
+       "`revise` re= names the message being CORRECTED, not one being answered")
+    ok(any(d.code == "E023" for d in s_rv.add(parse_one(
+        "a9.1 revise a9>* re=a1.4\n a rec = mine now ~hi\n unk []"))),
+       "E023: you may only revise your own message, never someone else's")
 
     print("\n== failure taxonomy ==")
     ok(any(d.code == "E016" for d in validate(

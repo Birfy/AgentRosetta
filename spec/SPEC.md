@@ -652,8 +652,13 @@ The same content must not appear twice in a channel; after the first time, point
 Violating this fails conformance R1.
 
 An unresolved `@x` is fetched with the host's `deref(x)`. This turns the context window
-from a buffer that must hold everything into demand-paged storage. The saving is tokens,
-but more importantly **attention that is not diluted**.
+from a buffer that must hold everything into demand-paged storage.
+
+**The saving here is not tokens.** Measurement (§25.1) shows a machine-readable address
+costs *more* than the English phrase it replaces; referencing pays only when it saves you
+from carrying the artifact. What the rule buys unconditionally is that content stays
+**addressable** — and that attention is not diluted by material nobody in this exchange
+needs to read.
 
 When relaying someone else's claim you **must** keep their confidence (never raise it),
 cite the source in `why`, and set `src=@a4.3` if the whole message is a relay. This blocks
@@ -1238,21 +1243,50 @@ the format and must earn their place.
 
 ### 25.1 What is measured today
 
-`bench/token_compare.py` compares four hand-written pairs against **equal-information**
-prose baselines — baselines that spell out the same per-claim confidence, the same unknowns
-and the same references. On those four pairs the wire form is roughly **20% smaller**.
+**Short exchanges.** `bench/token_compare.py` compares four hand-written pairs against
+**equal-information** prose baselines. On those pairs the wire form is roughly **21%
+smaller**.
 
-Read that number carefully:
+**Long conversations.** `bench/long_cases.py` runs the same comparison over a 24-message
+incident investigation. **The saving does not scale.** Against prose written by a
+disciplined agent the wire form is **5% larger**; against a re-pasting agent it is 4%
+smaller. Where the tokens go:
 
-- Against a *chatty* baseline the same comparison shows 3–4×. That figure is meaningless
-  and this project does not quote it.
-- Four pairs measure a **format**, not a system. Metric 1 above is the number that matters
-  and it has not been run.
+| | tokens | share |
+|---|---|---|
+| message headers | 519 | 29% |
+| `@references` | 455 | 25% |
+| slot keys | 110 | 6% |
+| `~confidence` | 52 | 2% |
+| payload | 631 | 35% |
+
+Two costs grow linearly with message count and cancel the per-message saving: a header
+costs ~22 tokens where prose addresses the same thing in ~8, and **a machine-readable
+address costs more than the English phrase it replaces**.
+
+This contradicts what §11.6 previously implied. **Reference-over-copy is not a token
+optimisation.** It pays only when it saves you from carrying the artifact; the crossover
+sits around a few hundred tokens of shared artifact content, past which it wins by a
+widening margin. Below that, disciplined prose is cheaper. Reference-over-copy earns its
+place in this specification by keeping content addressable and attention undiluted — not
+by being shorter.
+
+Read all of these numbers carefully:
+
+- Against a *chatty* baseline the short comparison shows 3–4×. That figure is meaningless
+  and this specification does not use it.
+- A handful of cases measure a **format**, not a system. Metric 1 above is the number that
+  matters and it has not been run.
 - Content-heavy messages compress least, because the content is the same bytes either way.
-  That is the honest shape of the result.
 
-**The efficiency case for AgentRosetta is real but modest. The integrity case is the
-larger one, and it is also the one still awaiting evidence.**
+**The efficiency case is narrower than this project first claimed: real on short
+coordination messages and wherever agents would otherwise re-paste artifacts, roughly
+neutral on long disciplined conversations, negative if everything is addressed with long
+URIs out of habit.**
+
+What the decomposition does establish is that **the integrity machinery is not what you pay
+for**: confidence, unknowns and assumptions together come to 2% of the wire form. Whether
+they earn even that has to come from the task-level evaluation, not from a token count.
 
 ---
 
