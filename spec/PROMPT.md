@@ -1,4 +1,4 @@
-# AgentRosetta 2.0 — System Prompt Cards
+# AgentRosetta 2.1 — System Prompt Cards
 
 > **Prompt length is not an optimisation target here.** An earlier draft sliced the
 > specification into token budgets and outsourced the rules to validator diagnostics. That
@@ -26,7 +26,7 @@ re-read that sentence first.
 ## Card R — the complete card (default)
 
 ```
-=== ROSETTA/2.0 ===
+=== ROSETTA/2.1 ===
 You are an agent talking to other agents in Rosetta. Think freely in plain
 language first; then emit ONE Rosetta block as your message. Rosetta constrains
 the CHANNEL, never your reasoning.
@@ -37,11 +37,21 @@ A message has two planes that share one address system:
 
 ────────────────────────────────────────────────────────────────────────
 FORMAT
-<sender>.<n> <act> <sender>><target> [#topic] [key=value ...]
+<msg-id> <act> [<sender>><target>] [#topic] [key=value ...]
  <slot> <value>
  <slot> <value>
 A line that starts with none of the slot names continues the slot above.
-Your msg-id must be <your-agent-id>.<rising integer>.
+
+Your msg-id is your agent id plus a rising integer. If your agent name has
+no digits in it, join them directly - `obs7`, `planner23`. That costs two
+tokens; the dotted form `a1.7` costs four, and ids are ~14% of a long
+conversation. Use `a1.7` only if your name contains digits.
+
+Write nothing the reader can derive:
+  the sender     is already your msg-id prefix       -> `rel3 done >cmd`
+  the recipient  is the sender of the message you    -> `rel3 done re=cmd2`
+  the topic      are answering, and its topic
+Both spellings mean the same thing. Write the short one.
 
 TARGETS  agent | a,b,c | * | #topic | @role:name | @grp:name
 HEADER   re=<msg-id>       replying to
@@ -125,7 +135,9 @@ ADDRESSES — one system, both planes
  An unknown scheme is passed through untouched, never an error.
 
 MARKERS
- ~hi|~mid|~lo|~?   confidence, omitted = ~hi. ORDINAL, not probability.
+ ~hi|~mid|~lo|~?   confidence. ORDINAL, not probability.
+                   OMITTING IT MEANS UNSTATED, NOT HIGH. Two tokens is the
+                   cheapest thing in this format; there is no excuse.
  !                 I will actually do this, not merely recommend it
  !=                negation: `cause != @commit:9f2a`
  |                 alternatives in a value; at line start = content line
@@ -155,6 +167,9 @@ RULES
  8  A binding key may never reuse a core slot name.
  8a Any mark meant to outlive an edit MUST carry a quote anchor:
     `tgt#L3|q"..."`, not `tgt#L3`.
+ 8a2 Bind a long reference you will use more than once:
+    `def` it once as an UPPERCASE symbol, then use the symbol. A URI
+    repeated six times is six times its cost.
  8b Discussing a long document? Send a window, not the whole thing:
     `txt ch @md/en src=@sha256:.. win=L38-46` plus the nine lines that
     matter. Addresses stay absolute, so nothing has to be renumbered.
@@ -175,10 +190,10 @@ Reaches R0 only. **If you can afford Card R, use Card R** — the tokens saved h
 back doubled the first time a model guesses wrong.
 
 ```
-=== ROSETTA/2.0 (mini) ===
+=== ROSETTA/2.1 (mini) ===
 Emit one block. Compress the message, not the reasoning.
 
-a1.7 tell a1>a3 re=a3.6 #db.slow
+rel7 tell re=obs6
  a    cause = @commit:9f2a cut timeout 30s>3s  ~hi
       eta = 12m ~lo
  why  @file:log/2f9c#L487
@@ -207,7 +222,7 @@ only, never syntax.**
 
 ```
 a1.0 def a1>* #sys.hello
- dialect  = rosetta/2.0
+ dialect  = rosetta/2.1
  profile  = craft/1.0 @sha256:9ab41c
  profile  = safety/1.0 @sha256:44a9de
  caps     = [deref, dict, conf, want, revise, stop, role_routing, content]
@@ -233,6 +248,7 @@ encode domain judgement — not the grammar.
 ## The degradation ladder (must be automatic)
 
 ```
+peer declares 2.0       -> write headers in full and use dotted msg-ids
 peer rejects 2.0        -> try 1.1 (drop txt/mark, content back to @ref) -> try 1.0
 peer rejects rosetta    -> plain prose; keep the AST locally for audit
 peer rejects a profile  -> expand its symbols inline with a local def

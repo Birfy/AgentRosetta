@@ -1,4 +1,4 @@
-# AgentRosetta 2.0 — Language Specification
+# AgentRosetta 2.1 — Language Specification
 
 > A general-purpose language for agent-to-agent communication. It carries both
 > **coordination** (who, what act, how sure, what is unknown, who acts next) and
@@ -313,6 +313,22 @@ symbol   ::= [A-Z][A-Z0-9_]+        CKO, PHI, GLOSS
 > **A msg-id must be prefixed with the sender's agent-id.** Concurrent numbering cannot
 > collide, `re=a1.7` is never ambiguous, and the msg-id doubles as an idempotency key (§19).
 
+Two spellings, one meaning:
+
+| Form | Example | BPE cost | When |
+|---|---|---|---|
+| dotted | `a1.7`, `planner.23` | **4 tokens** | always valid; required if the agent name contains digits |
+| compact | `obs7`, `planner23` | **2 tokens** | letters are the agent, trailing digits the sequence |
+
+Every separator — `.`, `-`, `_`, `:` — forces a BPE split, so the dotted form costs four
+tokens where the compact form costs two. Message ids are about **14% of a long
+conversation**, so this is the single largest lever in the format (§25.1).
+
+**Recommendation: name agents with letters only** (`obs`, `dba`, `release`, not `a1`,
+`a2`) and use the compact form. It is cheaper *and* more readable than numbered agents.
+Both spellings parse to the same `(agent, sequence)` pair; the AST does not distinguish
+them (invariant I-3).
+
 **Symbols and reserved words are case-sensitive.** Reserved words are lowercase, symbols
 uppercase, so `SRC` (a symbol) and `src` (a header field) are different names that never
 occupy the same syntactic position.
@@ -330,11 +346,18 @@ conf ::= "~" ( "hi" | "mid" | "lo" | "?" | float )
 | `~lo` | One possibility among several | < 0.4 |
 | `~?` | I genuinely cannot estimate | — |
 | `~0.85` | Numeric — **only with a real calibration source** | — |
-| omitted | Equivalent to `~hi` | — |
+| omitted | **Unstated. Not `~hi`.** | — |
 
 Three grades rather than numbers because LLMs are poorly calibrated at fine granularity
 but tolerably ordinal — and because `~hi` is two tokens where `~0.85` is four. Cheaper
 *and* more honest.
+
+**Omission means unstated, and this is deliberate.** An earlier draft made omission
+equivalent to `~hi`, which is cheaper by about 2.6% of a message. It was wrong: under
+that rule an agent that never writes `~` silently asserts full confidence in everything,
+which is exactly the epistemic collapse §1.2 describes. Conformance R2 requires explicit
+confidence on claims (`W005`). This is one of the few places where the specification
+deliberately chose the more expensive option.
 
 ---
 
@@ -346,8 +369,8 @@ but tolerably ordinal — and because `~hi` is two tokens where `~0.85` is four.
 document     ::= ( message | junk )*
 message      ::= header LF body
 
-header       ::= msg-id SP act SP route [ SP topic ] { SP hfield }
-route        ::= agent-id ">" target { "," target }
+header       ::= msg-id SP act [ SP route ] [ SP topic ] { SP hfield }
+route        ::= [ agent-id ] ">" target { "," target }
 target       ::= agent-id | "*" | topic | "@role:" name | "@grp:" name
 topic        ::= "#" name { "." name }
 hfield       ::= hkey "=" atom
@@ -373,6 +396,27 @@ field        ::= name [ "?" ] [ ":" type ]
 reflist      ::= ref { ( SP | "," ) ref }
 list         ::= "[" [ expr { "," expr } ] "]"
 ```
+
+### 6.2.1 Nothing derivable is required
+
+The header states only what cannot be inferred. Three things always can be:
+
+| Elidable | Derived from | Example |
+|---|---|---|
+| the sender | the msg-id prefix, which §5.3 makes mandatory | `rel3 done >cmd` |
+| the recipient | the sender of the message named by `re=` | `rel3 done re=cmd2` |
+| the topic | the topic of the message named by `re=` | `rel3 done re=cmd2` |
+
+`rel3 done a4>cmd re=cmd2 #inc.4471` and `rel3 done re=cmd2` **parse to the same AST**.
+Canonical form folds a value away whenever it is derivable — including one the author
+wrote out explicitly — so that one meaning has one spelling (invariant I-3). The human
+rendering always shows it in full; elision is a wire concern, never a display one.
+
+Worth about **9% of a long conversation** (§25.1).
+
+> **Interoperation.** A 2.0 parser cannot read an elided route. Terse form is therefore
+> gated on the handshake: when a peer declares `dialect = rosetta/2.0`, write headers out
+> in full (§21.1). New parsers read both.
 
 ### 6.3 Three disambiguation rules
 
@@ -1102,6 +1146,7 @@ a1.0 def a1>* #sys.hello
 ### 21.1 The degradation ladder (must be automatic)
 
 ```
+peer declares 2.0       -> write headers in full, and dotted msg-ids; everything else works
 peer rejects 2.0        -> try 1.1 (drop txt/mark, content back to @ref) -> try 1.0
 peer rejects rosetta    -> plain prose; keep the AST locally for audit
 peer rejects a profile  -> expand its symbols inline with a local def
@@ -1117,6 +1162,10 @@ peer has no content     -> spill txt blocks to a blob and send @sha256: instead
 
 - `rosetta/MAJOR.MINOR`. MINOR is additive only: anything new must be safely ignorable by
   an older parser as a continuation line.
+- **2.1 is the one exception, and it is handled by the handshake rather than waved away.**
+  An elided route and a compact msg-id are not ignorable — a 2.0 parser simply cannot read
+  them. So a 2.1 sender writes full headers whenever the peer declares 2.0 (§21.1). The
+  wire form is negotiated; the AST is not.
 - **The core act, slot and marker vocabularies are frozen.** Extension goes through profiles.
 - Header extensions use the `x_` prefix; older parsers ignore them.
 - Ref schemes and `@fmt` values are open sets; adding one is not a breaking change.
@@ -1244,32 +1293,46 @@ the format and must earn their place.
 ### 25.1 What is measured today
 
 **Short exchanges.** `bench/token_compare.py` compares four hand-written pairs against
-**equal-information** prose baselines. On those pairs the wire form is roughly **21%
-smaller**.
+**equal-information** prose baselines. The wire form is roughly **21% smaller**.
 
-**Long conversations.** `bench/long_cases.py` runs the same comparison over a 24-message
-incident investigation. **The saving does not scale.** Against prose written by a
-disciplined agent the wire form is **5% larger**; against a re-pasting agent it is 4%
-smaller. Where the tokens go:
+**Long conversations.** `bench/long_cases.py` runs a 24-message incident investigation.
+The first measurement was a negative result: as originally written, the wire form was
+**5% larger** than prose from a disciplined agent. Three redundancies accounted for it,
+and removing them is where 2.1 came from:
 
-| | tokens | share |
+| | tokens | vs prose |
 |---|---|---|
-| message headers | 519 | 29% |
-| `@references` | 455 | 25% |
-| slot keys | 110 | 6% |
-| `~confidence` | 52 | 2% |
-| payload | 631 | 35% |
+| 2.0 as first written, full headers | 1767 | +5% |
+| **A** elide derivable header parts (§6.2.1) | 1615 | −4% |
+| **B** bind repeated URIs with `def` (§14.2) | 1595 | −5% |
+| **C** letters-only agents, compact msg-ids (§5.3) | **1501** | **−11%** |
+| *prose, disciplined agent* | *1669* | |
+| *prose, re-pasting agent* | *1829* | *−18%* |
 
-Two costs grow linearly with message count and cancel the per-message saving: a header
-costs ~22 tokens where prose addresses the same thing in ~8, and **a machine-readable
-address costs more than the English phrase it replaces**.
+**15% smaller than where it started, and the sign against prose flips.** Fidelity is
+unchanged: the AST, the round trip and the human rendering are identical at every step —
+these remove redundancy, never information.
 
-This contradicts what §11.6 previously implied. **Reference-over-copy is not a token
-optimisation.** It pays only when it saves you from carrying the artifact; the crossover
-sits around a few hundred tokens of shared artifact content, past which it wins by a
-widening margin. Below that, disciplined prose is cheaper. Reference-over-copy earns its
-place in this specification by keeping content addressable and attention undiluted — not
-by being shorter.
+What each lever teaches:
+
+- **A is the big one, and it is pure duplication.** The sender is already the msg-id
+  prefix; a reply's recipient and topic are already its parent's. Writing them again cost
+  9% of the conversation.
+- **B is the dictionary doing its job.** The original transcript never used `def` for
+  repeated URIs — an authoring failure, not a language one.
+- **C is a tokeniser fact, not a design one.** Every separator forces a BPE split, so
+  `a1.7` costs four tokens and `obs7` costs two. Message ids are ~14% of a long
+  conversation.
+
+**What is still expensive, and stays that way.** A machine-readable address costs more
+than the English phrase it replaces. **Reference-over-copy is not a token optimisation**;
+it pays only when it saves you from carrying the artifact, with a crossover a few hundred
+tokens of shared content in. It earns its place by keeping content addressable and
+attention undiluted — not by being shorter.
+
+**What was made deliberately more expensive.** Omitting `~conf` used to mean `~hi`. That
+was cheaper by ~2.6% and wrong: an agent that never writes `~` would silently assert full
+confidence in everything. Omission now means *unstated* (§5.4).
 
 Read all of these numbers carefully:
 
@@ -1279,16 +1342,13 @@ Read all of these numbers carefully:
   matters and it has not been run.
 - Content-heavy messages compress least, because the content is the same bytes either way.
 
-**The efficiency case is narrower than this project first claimed: real on short
-coordination messages and wherever agents would otherwise re-paste artifacts, roughly
-neutral on long disciplined conversations, negative if everything is addressed with long
-URIs out of habit.**
+**The efficiency case, stated as the data supports it:** modestly positive on short
+coordination messages, about 10% on long conversations once the redundancy is gone,
+clearly better wherever agents would otherwise re-paste artifacts, and negative if you
+ignore §5.3 and §6.2.1.
 
-What the decomposition does establish is that **the integrity machinery is not what you pay
-for**: confidence, unknowns and assumptions together come to 2% of the wire form. Whether
-they earn even that has to come from the task-level evaluation, not from a token count.
-
----
+What the cost decomposition does establish is that **the integrity machinery is not what
+you pay for**: confidence, unknowns and assumptions come to 2% of the wire form.
 
 ## 26. Risks and open problems
 

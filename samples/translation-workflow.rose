@@ -9,7 +9,7 @@
 #                 s=Session(); [s.add(m) for m in parse(open('samples/translation-workflow.rose').read())]"
 
 a1.0 def a1>* #sys.hello
- dialect  = rosetta/2.0
+ dialect  = rosetta/2.1
  profile  = craft/1.0 @sha256:9ab41c
  caps     = [deref, dict, conf, want, revise, stop, role_routing, content]
  conform  = R2c

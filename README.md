@@ -14,11 +14,11 @@
 </p>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-121%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-135%20passing-brightgreen">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.9%2B-blue">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-lightgrey">
-  <img alt="spec" src="https://img.shields.io/badge/spec-2.0-8957e5">
+  <img alt="spec" src="https://img.shields.io/badge/spec-2.1-8957e5">
 </p>
 
 ---
@@ -268,6 +268,8 @@ codes  notfound denied timeout budget ambiguous unsafe unsupported
        conflict upstream stuck malformed empty stale
 addr   @a1.7.tgt#L3.c5-9   @a1.7.a.cause   @img:sha256:9c..#box=..
        @a1.7.tgt#L3|q"quote anchor"   <- survives edits, and says how it survived
+ids    obs7   letters = agent, digits = sequence, 2 tokens
+       a1.7   dotted form, always valid, 4 tokens
 ```
 
 Frozen. Extension happens in **profiles** — versioned, content-addressed `def` packs — so
@@ -304,36 +306,42 @@ prose baselines — baselines that spell out the same per-claim confidence, the 
 unknowns and the same references — the wire form is about **21% smaller** across four
 one- and two-message pairs.
 
-*Compression, long conversations* (`bench/long_cases.py`). **It does not scale, and this
-is a negative result we ran into rather than around.** On a 24-message incident
-investigation, against prose written by a disciplined agent, the wire form comes out
-**5% larger**:
+*Compression, long conversations* (`bench/long_cases.py`). **The first run was a negative
+result, and it is the reason 2.1 exists.** On a 24-message incident investigation, the
+format as originally written came out **6% larger** than prose from a disciplined agent.
+Reading the decomposition turned up three redundancies. Removing them:
 
-| variant | tokens |
-|---|---|
-| rosetta wire | 1767 |
-| prose, disciplined agent | 1669 |
-| prose, re-pasting agent | 1829 |
-
-The decomposition says why. Two costs grow linearly with message count:
-
-| | tokens | share |
+| step | tokens | vs prose |
 |---|---|---|
-| message headers | 519 | 29% |
-| `@references` | 455 | 25% |
-| slot keys | 110 | 6% |
-| `~confidence` | **52** | **2%** |
-| payload | 631 | 35% |
+| 2.0 as first written, full headers | 1782 | +6% |
+| **A** elide derivable header parts | 1615 | −4% |
+| **B** bind repeated URIs with `def` | 1595 | −5% |
+| **C** letters-only agents, compact msg-ids | **1501** | **−11%** |
+| *prose, disciplined agent* | *1669* | |
+| *prose, re-pasting agent* | *1829* | *−18%* |
 
-A header costs ~22 tokens where prose addresses the same thing in ~8, and **a
-machine-readable address costs more than the English phrase it replaces**. Pointing only
-pays when the alternative is *carrying the thing pointed at* — the crossover sits around
-a few hundred tokens of shared artifact content, past which addressing wins by a widening
-margin. That is the regime a mesh spawning fresh workers actually lives in, but it is a
-condition, not a property of the format.
+**15% smaller than where it started, and the sign flips.** Nothing was removed but
+duplication — the AST, the round trip and the human rendering are identical at every step,
+which `bench/fidelity.py` verifies.
 
-Note the row that is nearly free: **the epistemic markers cost 2%.** The part of this
-design that changes downstream behaviour is not what you pay for. The addressing is.
+What each lever turned out to be:
+
+- **A is pure duplication.** The sender is already the msg-id prefix; a reply's recipient
+  and topic are already its parent's. Writing them again cost 9% of the conversation.
+  `rel3 done a4>cmd re=cmd2 #inc.4471` and `rel3 done re=cmd2` parse to the same AST.
+- **B is the dictionary doing its job.** The original transcript never bound its repeated
+  URIs with `def`. An authoring failure, not a language one.
+- **C is a tokeniser fact.** Every separator forces a BPE split, so `a1.7` costs four
+  tokens and `obs7` costs two — and message ids are ~14% of a long conversation. Name
+  agents with letters (`obs`, `dba`, `release`), which is cheaper *and* more readable than
+  `a1`, `a2`.
+
+Two things the exercise did **not** change. A machine-readable address still costs more
+than the phrase it replaces, so **reference-over-copy is a correctness feature, not a
+compression one** — it pays when it saves you from carrying the artifact. And omitting a
+confidence marker was made **more** expensive on purpose: it used to default to `~hi`,
+which is 2.6% cheaper and wrong, since an agent that never writes `~` would then silently
+assert full confidence in everything. Omission now means *unstated*.
 
 *Fidelity* (`bench/fidelity.py`). Thirteen deliberately hostile content lines — code fences,
 a line shaped exactly like a Rosetta header, RTL script, a decomposed grapheme, trailing
@@ -347,6 +355,7 @@ That harness also decomposes the cost, which is the part worth staring at:
 | | wire | without epistemics | prose |
 |---|---|---|---|
 | four pairs, 55 information items | **589** | 492 | 752 |
+| 24-message conversation | **1501** | 1449 | 1669 |
 
 **The epistemic fields cost 97 tokens — 16% of the wire form.** The 21% saving is *net of*
 them. That is the actual trade: fewer tokens **while** carrying confidence, unknowns and
@@ -363,10 +372,11 @@ evaluation in full. Until it runs, these are hypotheses:
 - the content plane beats re-pasting on collaborative tasks
 - the off-distribution penalty is near zero
 
-**The efficiency case is narrower than this project first claimed.** It is real on short
-coordination messages and on any exchange where agents would otherwise re-paste artifacts.
-It is roughly neutral on long disciplined conversations, and it can go negative if you
-address everything with long URIs out of habit.
+**The efficiency case, stated as the data supports it:** about 21% on short coordination
+messages, about 11% on long conversations once the redundancy is gone, better still
+wherever agents would otherwise re-paste artifacts — and **negative if you ignore the two
+conventions in [§5.3 and §6.2.1](spec/SPEC.md)**, which is how the first measurement came
+out.
 
 **The integrity case is the larger one — and it is still awaiting evidence.** What the cost
 decomposition does establish is that the integrity machinery is not what you are paying
@@ -380,10 +390,9 @@ even that has to come from the task-level evaluation, not from a token count.
 - There is no hard ceiling on channel size. That belongs to the host at the transport layer.
 - Profile ecosystem fragmentation is the largest long-term risk, and content addressing only
   partly mitigates it.
-- **The envelope is 29% of a long conversation and has not been optimised.** A repeated
-  `#topic` that `re=` already implies, and verbose URI-shaped references, are the obvious
-  targets. Nothing has been done about either, because doing it before the task-level
-  evaluation would be optimising the wrong number.
+- **References remain the expensive part** — 28% of a long conversation after the 2.1
+  cleanup, and a machine-readable address is genuinely longer than the English it
+  replaces. Shortening them without losing dereferenceability is unsolved.
 
 ---
 

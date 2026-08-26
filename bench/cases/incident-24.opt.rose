@@ -1,0 +1,149 @@
+# Same 24-message incident as incident-24.rose, same information, written the way
+# the spec recommends. Three changes, no content removed:
+#   1. agents named with letters only, so msg-ids need no separator (2 tok, not 4)
+#   2. repeated long URIs bound once with `def` -- what the dictionary is for
+#   3. derivable header parts elided: the sender is the msg-id prefix; a reply's
+#      recipient and topic are its parent's
+# Diff the two files to see exactly what changed.
+
+cmd0 def >* #sys.hello
+ dialect = rosetta/2.0
+ conform = R2c
+
+cmd1 def >*
+ CKO   = the checkout service @file:services/checkout
+ SPIKE = 5xx rate above 2% sustained longer than 60s
+ SLO   = 99.9% availability measured over a rolling 30 days
+ RB    = the rollback runbook @file:runbooks/rollback.md
+ GCKO  = @dash:grafana/cko-5xx
+ GDB   = @dash:grafana/db-overview
+
+cmd2 do >@role:sre #inc.4471 pri=high
+ q     SPIKE on CKO since 14:02, find the cause and stop the bleeding
+ sub   s1 = correlate logs and metrics       @role:observability
+       s2 = check recent deploys and config  @role:release      on=s1
+       s3 = check database health            @role:dba
+       s4 = draft the customer statement     @role:comms        on=s2
+ by    45m
+ want  {cause}
+
+obs1 take re=cmd2
+
+obs2 part re=cmd2 at=@t:2026-08-26T14:11Z
+ a     error_class = upstream timeout, not 500 from CKO itself ~hi
+       onset       = @t:2026-08-26T14:02:20Z ~hi
+ why   @file:log/2f9c#L440-512 every failure is a 504 from the payment upstream
+ ctx   GCKO#from=14:00&to=14:15
+ unk   [whether the upstream itself degraded, blast radius beyond CKO]
+
+dba1 take re=cmd2
+
+dba2 part re=cmd2 at=@t:2026-08-26T14:14Z ttl=10m
+ a     db_health  = normal ~hi
+       slow_query = none above the 200ms threshold ~hi
+       conn_pool  = 34% utilised ~hi
+ why   GDB#from=13:30&to=14:15
+ unk   []
+
+rel1 part re=cmd2
+ a     deploys_since_1330 = [@commit:9f2a, @commit:c14e] ~hi
+       config_changes     = [@commit:9f2a] ~hi
+ why   @ext:ci:pipeline-8817 both landed at 14:01:40
+ ctx   @obs2
+ unk   [who approved 9f2a]
+
+rel2 def >*
+ BAD = @commit:9f2a the payment-client timeout change
+
+rel3 done re=cmd2
+ a     cause = BAD lowered http.timeout 30s>3s on the payment client ~hi
+ why   BAD#L18-24 the timeout is the only behavioural change; onset in
+       @obs2 matches the deploy time within 40s
+ ctx   @obs2 @rel1
+ risk  @commit:c14e also landed at 14:01:40 and has not been ruled out ~mid
+ unk   [whether c14e contributes]
+
+cmd3 ask >rel re=rel3
+ q     rule out c14e before we roll back
+ want  {c14e_implicated}
+ by    5m
+
+rel4 tell re=cmd3
+ a     c14e_implicated = no ~hi
+ why   @commit:c14e touches only @file:web/static/footer.tsx, no runtime path
+ unk   []
+
+cmd4 propose >@role:human #inc.4471 pri=block
+ q     roll back BAD now?
+ ctx   @rel3 @rel4 @D:RB
+ opt   [revert BAD, raise the timeout by config, wait for the upstream to recover]
+ a     rec = revert BAD ~hi
+ why   the config path needs a deploy anyway, so it is not faster
+ risk  reverting reintroduces the slow query in @issue:441 ~mid
+ unk   [current upstream p99]
+ want  accept|reject
+
+sre1 accept re=cmd4
+ why   SLO burn is the larger risk right now
+
+cmd5 do >rel re=sre1 pri=high
+ a     step = !revert BAD and deploy
+ by    15m
+ want  done|fail
+
+rel5 take re=cmd5
+
+rel6 part re=cmd5 at=@t:2026-08-26T14:31Z
+ a     stage = build green, canary at 5% ~hi
+ unk   [whether 5% is enough signal to judge]
+
+rel7 done re=cmd5 at=@t:2026-08-26T14:39Z
+ a     reverted = BAD ~hi
+       deployed = @commit:aa71 ~hi
+ why   @ext:ci:pipeline-8823
+ unk   [error rate after full rollout, still rolling]
+
+obs3 part re=cmd2 at=@t:2026-08-26T14:47Z
+ a     error_rate = 0.4% and falling ~hi
+ why   GCKO#from=14:35&to=14:47
+ unk   [whether it settles below the SPIKE threshold]
+
+obs4 part re=cmd2 at=@t:2026-08-26T15:02Z
+ a     error_rate = 0.08% ~hi
+       recovered  = yes ~hi
+ why   GCKO#from=14:47&to=15:02 fifteen minutes below SLO baseline
+ unk   []
+
+cmd6 revise >* re=cmd4
+ a     rec != revert-only ~hi
+ why   conflict @obs4 recovery is confirmed, but the 3s timeout was arguably
+       correct and 30s was masking upstream latency all along
+ unk   [what the timeout should actually be]
+
+com1 tell >cmd #inc.4471.comms
+ txt draft @md/en v=1
+ | Between 14:02 and 14:47 UTC a subset of checkout requests failed.
+ | The cause was a configuration change to a payment timeout, which we
+ | have reverted. No orders were lost; affected customers saw an error
+ | at payment and could retry.
+ unk  [whether legal wants the word "outage"]
+
+cmd7 propose re=com1
+ mark @com1.draft#L3|q"No orders were lost" = we have not verified this yet ~hi
+      @com1.draft#L1|q"a subset of" > "Approximately 12% of" ~mid
+ why   @obs2 gives the failure share; the order claim needs @role:dba to confirm
+ unk   [exact affected order count]
+ want  accept|reject
+
+com2 accept re=cmd7
+ why   will hold the statement until the order count lands
+
+cmd8 note >@role:sre #inc.4471
+ a     cause     = BAD ~hi
+       fix       = @commit:aa71 ~hi
+       recovered = @t:2026-08-26T14:47Z ~hi
+       duration  = 45m ~hi
+ why   full chain in @#inc.4471
+ ctx   @rel3 @rel7 @obs4
+ unk   [correct long-term timeout value, exact affected order count]
+ risk  the underlying upstream latency is unaddressed ~hi

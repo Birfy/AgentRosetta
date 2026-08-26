@@ -5,6 +5,46 @@ This project follows the versioning rules in [spec/SPEC.md §22](spec/SPEC.md):
 MINOR releases are additive only, and anything new must be safely ignorable by an older
 parser as a continuation line.
 
+## [2.1.0] — 2026-08-26
+
+Written entirely because the long-case benchmark came out negative. Three redundancies,
+none of them load-bearing, cost more than the format saved.
+
+### Added
+
+- **Elidable header parts.** The sender may be omitted (it is the msg-id prefix); on a
+  reply the recipient and topic may be omitted (they are the parent's). Canonical form
+  folds them away even when written out, so one meaning has one spelling.
+  `rel3 done a4>cmd re=cmd2 #inc.4471` == `rel3 done re=cmd2`. Worth ~9%.
+- **Compact msg-ids.** `obs7` — letters are the agent, trailing digits the sequence — costs
+  two BPE tokens where `a1.7` costs four. Ids are ~14% of a long conversation. The dotted
+  form remains valid and is required when an agent name contains digits. Worth ~6%.
+- `canonical(text, terse=False)` to write every derivable part out, for diffing against 2.0
+  transcripts and for measuring what elision is worth.
+- `bench/long_cases.py`, `bench/cases/` with a 24-message scenario and two prose baselines.
+
+### Changed
+
+- **Omitting `~conf` now means UNSTATED, not `~hi`.** This is deliberately *more*
+  expensive, by about 2.6%. The cheap reading was wrong: under it an agent that never
+  writes `~` silently asserts full confidence in everything, which is the failure this
+  language exists to prevent.
+- Terse wire form is negotiated by the handshake. A 2.0 parser cannot read an elided route,
+  so a 2.1 sender writes full headers when the peer declares 2.0. The AST is unaffected.
+
+### Fixed
+
+- **`want done|fail` rejected `take` and `part`.** An act contract constrains the answer,
+  and claiming work or reporting progress does not purport to be one.
+- **`revise` was checked as if its `re=` named a message being replied to.** It names the
+  message being *corrected*. Every retraction was reported as a contract violation. New
+  `E023` enforces the real rule: you may only revise your own message.
+- A msg-id pattern briefly admitted digit-free ids, which made a one-letter slot line
+  (` a note = ...`) parse as a message header.
+
+Both contract bugs were found by writing a 24-message scenario. Neither is reachable from
+a two-message exchange.
+
 ## [Unreleased]
 
 ### Measured

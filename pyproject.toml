@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentrosetta"
-version = "2.0.0"
+version = "2.1.0"
 description = "A language for agents to talk to each other: compact on the wire, readable by people, precise about what nobody knows yet."
 readme = "README.md"
 requires-python = ">=3.9"

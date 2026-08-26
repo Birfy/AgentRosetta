@@ -108,12 +108,15 @@ _COMMA = r"[,，]"
 _TARGET = (r"(?:\*|" + _HASH + r"[a-z][a-z0-9_.]*|" + _AT +
            r"(?:role|grp):[a-z][a-z0-9_]*|[a-z][a-z0-9_]*)")
 
+# Nothing derivable is required. The sender is already the msg-id prefix; the
+# recipient and topic of a reply are already the parent's. So the route may drop
+# its sender, or be omitted entirely when `re=` supplies it.
 HEADER_RE = re.compile(
     r"^\s*"
-    r"(?P<id>[a-z][a-z0-9_]*(?:\.\d+)?)\s+"
-    r"(?P<act>" + "|".join(ACTS) + r")\s+"
-    r"(?P<from>[a-z][a-z0-9_]*)\s*" + _GT + r"\s*"
-    r"(?P<to>" + _TARGET + r"(?:\s*" + _COMMA + r"\s*" + _TARGET + r")*)"
+    r"(?P<id>[a-z][a-z0-9_]*\.\d+|[a-z]+\d+)\s+"
+    r"(?P<act>" + "|".join(ACTS) + r")"
+    r"(?:\s+(?P<from>[a-z][a-z0-9_]*)?\s*" + _GT + r"\s*"
+    r"(?P<to>" + _TARGET + r"(?:\s*" + _COMMA + r"\s*" + _TARGET + r")*))?"
     r"(?P<rest>(?:\s.*)?)$"
 )
 
@@ -135,7 +138,7 @@ BLOCK_HDR_RE = re.compile(
     r"(?P<attrs>(?:\s+[a-z][a-z0-9_]*\s*=\s*\S+)*)\s*$")
 CONTENT_RE = re.compile(r"^\s*\|(?P<body> ?)(?P<text>.*)$")
 ADDR_RE = re.compile(r"^[a-z][a-z0-9_]*(?:#[A-Za-z0-9_.\-]+)?$")
-_ADDR = (r"(?:@(?P<mid>[a-z][a-z0-9_]*\.\d+)\.)?"
+_ADDR = (r"(?:@(?P<mid>[a-z][a-z0-9_]*\.\d+|[a-z]+\d+)\.)?"
          r"(?P<blk>[a-z][a-z0-9_]*)"
          r"(?:#(?P<span>(?:[^\s\"]|\"[^\"]*\")+))?")
 ADDR_FULL_RE = re.compile(_ADDR + r"$")
@@ -198,6 +201,10 @@ NORMALIZE = str.maketrans({"　": " "})
 class Conf:
     """Confidence attached to a value. ORDINAL, not a probability."""
     kind: str  # "hi" | "mid" | "lo" | "?" | numeric string
+    # Absence of a Conf means UNSTATED, not high. If omission defaulted to `~hi`
+    # an agent that never writes `~` would silently assert full confidence in
+    # everything -- precisely the epistemic collapse this language exists to
+    # prevent. Stating it costs 2 tokens; that is the cheapest part of the format.
 
     @property
     def rank(self) -> int:
@@ -520,6 +527,7 @@ class Message:
     slots: List[Slot] = field(default_factory=list)
     diagnostics: List[Diagnostic] = field(default_factory=list)
     degraded: bool = False  # true when we wrapped raw prose as note + txt
+    inherited: List[str] = field(default_factory=list)  # header parts filled from re=
 
     # -- accessors -------------------------------------------------------
     def slot(self, key: str) -> Optional[Slot]:
@@ -589,6 +597,28 @@ class Message:
 # ==========================================================================
 # Small value parsers
 # ==========================================================================
+
+def sender_of(msg_id: str) -> str:
+    """Split a msg-id into its agent part.
+
+    Two spellings, one meaning. `a1.7` always works. `planner7` is the compact
+    form: letters are the agent, trailing digits the sequence. It costs two BPE
+    tokens where the dotted form costs four, which is 7% of a long conversation,
+    so it is the recommended spelling -- at the price of agent names that
+    contain no digits.
+    """
+    if "." in msg_id:
+        return msg_id.split(".")[0]
+    m = re.match(r"^([a-z]+)\d+$", msg_id)
+    return m.group(1) if m else msg_id
+
+
+def seq_of(msg_id: str) -> str:
+    if "." in msg_id:
+        return msg_id.split(".", 1)[1]
+    m = re.match(r"^[a-z]+(\d+)$", msg_id)
+    return m.group(1) if m else ""
+
 
 def parse_dur(s: str) -> Optional[timedelta]:
     """`15m`, `2h`, `30s`, `1d`, `1w` -> timedelta."""
@@ -751,11 +781,15 @@ def _parse_header(m: "re.Match[str]") -> Message:
     # A `#x` in the trailing part is the topic; targets were already consumed.
     stripped = HFIELD_RE.sub(" ", rest)
     topic_m = TOPIC_RE.search(stripped)
+    mid = m.group("id")
     return Message(
-        id=m.group("id"),
+        id=mid,
+        # An elided sender is the msg-id prefix, which section 5.3 makes mandatory.
         act=m.group("act"),
-        sender=m.group("from"),
-        recipients=[r.strip() for r in m.group("to").split(",")],
+        sender=m.group("from") or sender_of(mid),
+        # An elided route means "reply to whoever I am answering"; Session fills it.
+        recipients=([r.strip() for r in m.group("to").split(",")]
+                    if m.group("to") else []),
         topic=topic_m.group(1) if topic_m else None,
         hfields=hfields,
     )
@@ -855,9 +889,14 @@ def parse(text: str) -> List[Message]:
 # Unparsing (canonical wire form)
 # ==========================================================================
 
-def unparse(msg: Message) -> str:
-    head = f"{msg.id} {msg.act} {msg.sender}>{','.join(msg.recipients)}"
-    if msg.topic:
+def unparse(msg: Message, terse: bool = True) -> str:
+    """`terse` drops what a reader can derive: the sender (it is the msg-id
+    prefix) and, on a reply, the recipient and topic (they are the parent's)."""
+    head = f"{msg.id} {msg.act}"
+    sender = "" if terse and msg.id.startswith(msg.sender + ".") else msg.sender
+    if not (terse and "to" in msg.inherited):
+        head += f" {sender}>{','.join(msg.recipients)}"
+    if msg.topic and not (terse and "topic" in msg.inherited):
         head += f" #{msg.topic}"
     for k in HKEYS:
         if k in msg.hfields:
@@ -910,8 +949,23 @@ def unparse(msg: Message) -> str:
     return "\n".join(out)
 
 
-def canonical(text: str) -> str:
-    return "\n\n".join(unparse(m) for m in parse(text))
+def canonical(text: str, terse: bool = True) -> str:
+    """`terse=False` writes every header part out in full, even the derivable
+    ones. Useful for diffing against pre-2.1 transcripts, and for measuring what
+    elision is worth.
+
+    Terse serialisation needs conversation context: whether a reply's recipient
+    and topic are derivable depends on the message it answers. So the messages
+    are walked through a Session first, exactly as a receiver would.
+    """
+    # The Session runs either way: terse needs to know what IS derivable, and
+    # full needs the derived values in order to write them out. Only the
+    # printing differs.
+    msgs = parse(text)
+    seen = Session()
+    for m in msgs:
+        seen.add(m)
+    return "\n\n".join(unparse(m, terse=terse) for m in msgs)
 
 
 # ==========================================================================
@@ -945,9 +999,10 @@ def validate(msg: Message, session: "Session | None" = None) -> List[Diagnostic]
                     f"`def` symbol '{key}' is not UPPERCASE ([A-Z][A-Z0-9_]+)"))
 
     # -- Structural
-    if "." in msg.id and not msg.id.startswith(msg.sender + "."):
+    if seq_of(msg.id) and sender_of(msg.id) != msg.sender:
         d.append(Diagnostic("ERROR", "E003",
-            f"msg-id '{msg.id}' must be prefixed with sender '{msg.sender}'"))
+            f"msg-id '{msg.id}' must be prefixed with sender '{msg.sender}' "
+            f"(got '{sender_of(msg.id)}')"))
 
     if msg.act in ("reject", "fail"):
         if not msg.has("why"):
@@ -996,7 +1051,8 @@ def validate(msg: Message, session: "Session | None" = None) -> List[Diagnostic]
             bare = [b.key for b in a.bindings if b.conf is None]
             if bare:
                 d.append(Diagnostic("WARN", "W005",
-                    f"claims without ~conf (default ~hi): {', '.join(bare)}"))
+                    f"claims with no stated confidence (unstated is not high): "
+                    f"{', '.join(bare)}"))
             if not a.bindings and a.conf is None and a.raw.strip():
                 d.append(Diagnostic("WARN", "W005b", "unstructured `a` with no ~conf"))
 
@@ -1151,6 +1207,21 @@ class Session:
     # -- ingestion -------------------------------------------------------
     def add(self, msg: Message) -> List[Diagnostic]:
         d = validate(msg, self)
+        parent = self.messages.get(msg.hfields.get("re", ""))
+        if parent is not None:
+            # Absent OR redundant both count as derivable. Canonical form has one
+            # spelling per meaning (invariant I-3), so an explicitly written value
+            # that equals what the parent already implies is folded away too.
+            if not msg.recipients:
+                msg.recipients = [parent.sender]
+                msg.inherited.append("to")
+            elif msg.recipients == [parent.sender]:
+                msg.inherited.append("to")
+            if msg.topic is None and parent.topic:
+                msg.topic = parent.topic
+                msg.inherited.append("topic")
+            elif msg.topic and msg.topic == parent.topic:
+                msg.inherited.append("topic")
         if msg.id in self.messages:
             # msg-id is the idempotency key (SPEC section 19). Redelivery is a no-op.
             return [Diagnostic("INFO", "D001", f"duplicate delivery of {msg.id} ignored")]
@@ -1269,7 +1340,10 @@ class Session:
     def _msg_id_of(ref: str) -> str:
         raw = ref.lstrip("@")
         parts = raw.split(".")
-        return ".".join(parts[:2]) if len(parts) >= 2 and parts[1].isdigit() else ""
+        if len(parts) >= 2 and parts[1].isdigit():
+            return ".".join(parts[:2])
+        head = parts[0]
+        return head if re.match(r"^[a-z]+\d+$", head) else ""
 
     def resolve(self, ref: str) -> Optional[Message]:
         """Refs resolve THROUGH revisions by default; @x@orig gets the original."""
@@ -2149,6 +2223,31 @@ def _selftest() -> None:
        "W010: `part` and `take` do not discharge the obligation; claimant named")
     s_ob.add(parse_one("a2.14 done a2>a3 re=a3.40\n a pct = 100 ~hi\n unk []"))
     ok(s_ob.orphans() == [], "`done` discharges it")
+
+    print("\n== compact msg-ids and elided headers ==")
+    ok(parse_one("a1.1 tell a1>a3\n a note = x ~hi\n unk []").slot("a") is not None,
+       "a slot line is never mistaken for a header (a msg-id must carry a sequence)")
+    a = parse_one("a1.7 tell a1>a3 #t\n a x = 1 ~hi\n unk []")
+    b = parse_one("planner7 tell >a3 #t\n a x = 1 ~hi\n unk []")
+    ok(sender_of("a1.7") == "a1" and seq_of("a1.7") == "7", "dotted msg-id splits")
+    ok(sender_of("planner7") == "planner" and seq_of("planner7") == "7",
+       "compact msg-id splits at the letter/digit boundary")
+    ok(b.sender == "planner", "an elided sender is taken from the msg-id")
+    ok(a.sender == "a1" and validate(a) == [], "the dotted form still validates")
+    ok(any(d.code == "E003" for d in validate(
+        parse_one("planner7 tell a3>a1\n a x = 1 ~hi\n unk []"))),
+       "E003 still catches a msg-id that disagrees with the sender, either spelling")
+    s_h = Session()
+    s_h.add(parse_one("a1.2 do a1>@role:sre #inc.1\n q go\n want {cause}"))
+    inh = parse_one("a4.2 done re=a1.2\n a cause = X ~hi\n unk []")
+    s_h.add(inh)
+    ok(inh.recipients == ["a1"] and inh.topic == "inc.1",
+       "an elided route and topic are inherited from the message being answered")
+    ok(set(inh.inherited) == {"to", "topic"}, "and are marked as inherited")
+    ok(unparse(inh).splitlines()[0] == "a4.2 done re=a1.2",
+       "canonical form keeps them elided rather than re-expanding them")
+    ok("a4 → a1" in render(inh, "en") and "#inc.1" in render(inh, "en"),
+       "but the human rendering shows them in full")
 
     print("\n== revision, idempotency, dictionary ==")
     d_src = ("a1.0 def a1>* #sys.hello\n dialect = rosetta/2.0\n"
