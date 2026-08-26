@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-119%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-121%20passing-brightgreen">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-none-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.9%2B-blue">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-lightgrey">
@@ -292,10 +292,28 @@ still find:
 The specification and the reference implementation are complete and tested. **The claims
 are not all measured, and this README will not pretend otherwise.**
 
-**Measured.** On four hand-written pairs, against **equal-information** prose baselines —
+**Measured.** Two harnesses, both reproducible, both in CI.
+
+*Compression* (`bench/token_compare.py`). Against **equal-information** prose baselines —
 baselines that spell out the same per-claim confidence, the same unknowns and the same
-references — the wire form is about **20% smaller**. Run `bench/token_compare.py` and read
-the docstring before quoting it.
+references — the wire form is about **21% smaller** across four pairs.
+
+*Fidelity* (`bench/fidelity.py`). Thirteen deliberately hostile content lines — code fences,
+a line shaped exactly like a Rosetta header, RTL script, a decomposed grapheme, trailing
+whitespace — through ten parse/serialise cycles: **byte-identical**. An inventory of 55
+information items across the four pairs, each with a predicate that reads the AST:
+**55 of 55 machine-extractable**, against **0 of 55** from the prose baselines without an
+NLP pass. The prose holds the same facts; only a reader can get at them.
+
+That harness also decomposes the cost, which is the part worth staring at:
+
+| | wire | without epistemics | prose |
+|---|---|---|---|
+| four pairs, 55 information items | **589** | 492 | 752 |
+
+**The epistemic fields cost 97 tokens — 16% of the wire form.** The 21% saving is *net of*
+them. That is the actual trade: fewer tokens **while** carrying confidence, unknowns and
+assumptions that prose has to spell out in clauses no program can read.
 
 Against a *chatty* baseline the same comparison shows 3–4×. **That number is meaningless and
 this project does not use it.** Four pairs measure a format, not a system.

@@ -865,6 +865,16 @@ def unparse(msg: Message) -> str:
     for k in sorted(x for x in msg.hfields if x.startswith("x_")):
         head += f" {k}={msg.hfields[k]}"
     out = [head]
+    if msg.act == "def":
+        # A `def` body has no slot keys: every line is a binding. Emitting one
+        # would make the message unparseable on the way back in, and the first
+        # binding would be silently dropped. (Found by bench/fidelity.py.)
+        for s in msg.slots:
+            for b in s.bindings:
+                out.append(f" {b.key} = {b.value}" + (f" {b.conf}" if b.conf else ""))
+            if not s.bindings:
+                out.extend(f" {ln.strip()}" for ln in s.raw.splitlines() if ln.strip())
+        return "\n".join(out)
     for s in msg.slots:
         if s.block is not None:
             b = s.block
@@ -2114,6 +2124,15 @@ def _selftest() -> None:
     ok(s_ob.orphans() == [], "`done` discharges it")
 
     print("\n== revision, idempotency, dictionary ==")
+    d_src = ("a1.0 def a1>* #sys.hello\n dialect = rosetta/2.0\n"
+             " profile = craft/1.0 @sha256:9ab41c\n conform = R2c")
+    d_rt = parse_one(unparse(parse_one(d_src)))
+    ok([b.key for b in d_rt.slot("a").bindings] == ["dialect", "profile", "conform"],
+       "a `def` message round-trips without dropping its first binding")
+    s_rt = Session(); s_rt.add(parse_one(unparse(parse_one(
+        "a1.4 def a1>*\n CKO = checkout @file:services/checkout\n GLOSS = v3"))))
+    ok(set(s_rt.dictionary) == {"CKO", "GLOSS"},
+       "symbols survive a serialise/parse cycle")
     s_rev = Session()
     s_rev.add(parse_one("a1.13 tell a1>a3\n a cause = 9f2a ~hi\n unk []"))
     s_rev.add(parse_one("a1.19 revise a1>a3 re=a1.13\n a cause = not 9f2a ~hi\n"

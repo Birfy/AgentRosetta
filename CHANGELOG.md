@@ -48,6 +48,10 @@ addresses.
 
 ### Fixed
 
+- **`def` messages lost their first binding on a round trip.** Serialisation emitted the
+  bindings under an `a` slot key, which a `def` body does not accept, so re-parsing silently
+  dropped the first line — handshakes and dictionary definitions being exactly the messages
+  least able to afford it. Found by `bench/fidelity.py`.
 - Fullwidth punctuation in body text was silently ASCII-folded, rewriting Chinese commas.
   Normalisation now applies only at structural positions.
 - A `fail` reply was checked against the sender's `want` contract, turning every honest

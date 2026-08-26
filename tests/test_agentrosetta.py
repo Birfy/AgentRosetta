@@ -63,3 +63,13 @@ def test_bench_is_runnable():
     )
     assert proc.returncode == 0, proc.stderr
     assert "rosetta" in proc.stdout
+
+
+def test_fidelity_checks_pass():
+    """Round-trip fidelity and information recovery must be perfect."""
+    proc = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "bench", "fidelity.py")],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "All fidelity checks pass" in proc.stdout
